@@ -1,0 +1,16 @@
+darkdetect
+pillow
+pystray
+schedule
+six
+typing_extensions
+win11toast
+winrt-runtime
+winrt-Windows.Data.Xml.Dom
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections
+winrt-Windows.Globalization
+winrt-Windows.Graphics.Imaging
+winrt-Windows.Storage
+winrt-Windows.Storage.Streams
+winrt-Windows.UI.Notifications
