@@ -130,33 +130,33 @@ class TaskTray:
 
     def doRemove(self):
         for filepath in self.watch_files:
-            # 1. ショートカット（.lnk / .url）は発見次第、即座に一律排除
-            if filepath.lower().endswith((".lnk", ".url")):
-                logger.info(f"[DESTROY IMMEDIATE] {filepath}")
+            if filepath.lower().endswith(('.lnk', '.url')):
+                # ショートカット（.lnk / .url）は発見次第、即座に一律排除
                 try:
-                    # 即削除またはゴミ箱移動
-                    # os.remove(filepath)
-                    logger.info(f"[DESTROY Done] {filepath} (DEBUG: not deleted)")
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                        logger.info(f'[DESTROY IMMEDIATE] {filepath}')
                 except Exception as e:
                     logger.warning(f'{e}: {filepath}')
                 continue
 
-                # 2. 通常のファイル・フォルダの滞在時間カウント
-                # 滞在時間を計算
-                elapsed_time = time.time() - self.watch_files[filepath]
-                if elapsed_time > self.lifetime:
-                    logger.debug(f"[WARNING / ACTION] {filepath} has expired ({int(elapsed_time)}s).")
-                    notify(f'{filepath} expired (still not remove)')
+            # 通常のファイル・フォルダの滞在時間を計算
+            elapsed_time = time.time() - self.watch_files[filepath]
+            if elapsed_time > self.lifetime:
+                logger.warning(f'[ACTION] {filepath} has expired ({int(elapsed_time)}s).')
+                notify(f'{filepath} expired (still not remove)')
 
         # omit disappeared files from watch_files
         for filepath in self.watch_files.copy():
-            if filepath not in self.watch_files:
-                del self.watch_files[filepath]
+            if filepath in self.watch_files:
+                if not os.path.exists(filepath):
+                    del self.watch_files[filepath]
 
     def runSchedule(self):
         self.doMonitor()
 
         schedule.every(WATCH_INTERVAL).seconds.do(self.doMonitor)
+        schedule.every(WATCH_INTERVAL).seconds.do(self.doRemove)
 
         while not self.stop_event.is_set():
             schedule.run_pending()
