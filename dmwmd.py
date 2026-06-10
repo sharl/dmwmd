@@ -11,9 +11,8 @@ import time
 
 from PIL import Image
 from pystray import Icon, Menu, MenuItem
-from win11toast import notify
+from win11toast import xml, notify
 import darkdetect as dd
-import schedule
 
 from config import Config
 from getLog import getLog
@@ -24,11 +23,14 @@ TITLE = 'DMWMD'
 # inspired from "Here's to Future Days"
 TOOLTIP = "Don't mess with my desktop"
 
-
 # default definitions
-WATCH_TARGETS = get_desktop_folders()
-WATCH_INTERVAL = 60 * 5
-LIFETIME = 60 * 30
+MONITOR_TARGETS = get_desktop_folders()
+MONITOR_LIST = [1, 5, 10, 15, 30, 60]
+DEFAULT_MONITOR_INTERVAL = MONITOR_LIST[-1]
+REMOVE_LIST = [1, 5, 10, 15, 30, 60, 120]
+DEFAULT_REMOVE_INTERVAL = REMOVE_LIST[-1]
+LIFETIME_LIST = [0, 120, 360, 720, 1440]
+DEFAULT_LIFETIME = LIFETIME_LIST[-1]
 
 # logger settings
 logname = getLog(TITLE, 'log.log')
@@ -46,9 +48,11 @@ logger.setLevel(logging.DEBUG)
 
 @dataclass
 class Setting:
-    # second
-    watch_interval: int
-    # second
+    # minutes
+    monitor_interval: int
+    # minutes
+    remove_interval: int
+    # minutes
     lifetime: int
     delete_phisically: bool
 
@@ -68,7 +72,7 @@ def getVersion():
             v = fd.read().strip().removeprefix('v')
     except Exception:
         pass
-    return f'{TITLE} {v}'
+    return v
 
 
 class TaskTray:
@@ -77,17 +81,51 @@ class TaskTray:
         self.config = Config(TITLE)
 
         # 監視する対象: 発見した時刻
-        self.watch_files = dict()
-        self.watch_interval = WATCH_INTERVAL
-        self.lifetime = LIFETIME
+        self.monitor_files = dict()
+        self.monitor_interval = DEFAULT_MONITOR_INTERVAL
+        self.remove_interval = DEFAULT_REMOVE_INTERVAL
+        self.lifetime = DEFAULT_LIFETIME
         self.delete_phisically = False
 
         image = Image.open(io.BytesIO(binascii.unhexlify(ICON.replace('\n', '').strip())))
+
+        monitor_submenu = []
+        for i in MONITOR_LIST:
+            monitor_submenu.append(
+                MenuItem(
+                    f'{i} minute{"" if i == 1 else "s"}',
+                    self.set_monitor_interval,
+                    checked=lambda x: self.monitor_interval == int(str(x).split()[0]),
+                ),
+            )
+        remove_submenu = []
+        for i in REMOVE_LIST:
+            remove_submenu.append(
+                MenuItem(
+                    f'{i} minute{"" if i == 1 else "s"}',
+                    self.set_remove_interval,
+                    checked=lambda x: self.remove_interval == int(str(x).split()[0]),
+                ),
+            )
+        lifetime_submenu = []
+        for i in LIFETIME_LIST:
+            lifetime_submenu.append(
+                MenuItem(
+                    f'{int(i / 60)} hours' if i else 'immediately',
+                    self.set_lifetime,
+                    checked=lambda x: self.x_lifetime(x),
+                ),
+            )
+
         main_menu = Menu(
-            # MenuItem('Manual Cleanup', self.on_menu_delete),
-            # 監視間隔のサブメニューとかゴミ箱行き設定のオンオフとかを入れる予定
+            MenuItem(f'{TOOLTIP} {getVersion()}', lambda: False, default=True),
             Menu.SEPARATOR,
-            MenuItem(f'Exit {getVersion()}', self.stopApp),
+            MenuItem('Monitor Interval', Menu(*monitor_submenu)),
+            MenuItem('Remove Interval', Menu(*remove_submenu)),
+            MenuItem('Notification Duration', Menu(*lifetime_submenu)),
+            # 監視間隔・削除間隔のサブメニューとかゴミ箱行き設定のオンオフとかを入れる予定
+            Menu.SEPARATOR,
+            MenuItem('Exit', self.stopApp),
         )
         self.app = Icon(name=f'PYTHON.win32.{TITLE}', title=TOOLTIP, icon=image, menu=main_menu)
         # ここで設定読み込みして反映
@@ -96,7 +134,8 @@ class TaskTray:
     def load_config(self):
         try:
             setting = Setting(**self.config.load())
-            self.watch_interval = setting.watch_interval
+            self.monitor_interval = setting.monitor_interval
+            self.remove_interval = setting.remove_interval
             self.lifetime = setting.lifetime
             self.delete_phisically = setting.delete_phisically
         except Exception:
@@ -104,65 +143,118 @@ class TaskTray:
 
     def save_config(self):
         setting = Setting(
-            watch_interval=self.watch_interval,
+            monitor_interval=self.monitor_interval,
+            remove_interval=self.remove_interval,
             lifetime=self.lifetime,
             delete_phisically=self.delete_phisically,
         )
         self.config.save(asdict(setting))
 
-    def doMonitor(self):
-        for target_dir in WATCH_TARGETS:
-            if not os.path.exists(target_dir):
-                continue
+    def set_monitor_interval(self, _, item: MenuItem):
+        self.monitor_interval = int(str(item).split()[0])
 
-            for filename in os.listdir(target_dir):
-                if filename.lower() == 'desktop.ini':
+    def set_remove_interval(self, _, item: MenuItem):
+        self.remove_interval = int(str(item).split()[0])
+
+    def _get_lifetime(self, item: MenuItem) -> int:
+        ls = str(item).split()
+        if len(ls) == 1:
+            lifetime = 0
+        else:
+            # unit: hour -> minute
+            lifetime = int(ls[0]) * 60
+        return lifetime
+
+    def set_lifetime(self, _, item: MenuItem):
+        self.lifetime = self._get_lifetime(item)
+
+    def x_lifetime(self, item: MenuItem) -> bool:
+        return self.lifetime == self._get_lifetime(item)
+
+    def doMonitor(self):
+        while not self.stop_event.is_set():
+            begin = time.time()
+
+            for target_dir in MONITOR_TARGETS:
+                if not os.path.exists(target_dir):
                     continue
 
-                filepath = os.path.join(target_dir, filename)
-                if filepath not in self.watch_files:
-                    # 初めて発見した時刻を記録
-                    # もしくは st_ctime, st_mtime 的なやつ?
-                    # 作られたばかりなら様子を見てやってもいい
-                    # ディレクトリの扱いはまたあとで
-                    logger.debug(f'found {filepath}')
-                    self.watch_files[filepath] = time.time()
+                for filename in os.listdir(target_dir):
+                    if filename.lower() == 'desktop.ini':
+                        continue
+
+                    filepath = os.path.join(target_dir, filename)
+                    if filepath not in self.monitor_files:
+                        # 初めて発見した時刻を記録
+                        # もしくは st_ctime, st_mtime 的なやつ?
+                        # 作られたばかりなら様子を見てやってもいい
+                        # ディレクトリの扱いはまたあとで
+                        logger.debug(filepath)
+                        self.monitor_files[filepath] = time.time()
+
+            elapsed = time.time() - begin
+            sleep_time = max(0, self.monitor_interval * 60 - elapsed)
+            if self.stop_event.wait(sleep_time):
+                break
 
     def doRemove(self):
-        for filepath in self.watch_files:
-            if filepath.lower().endswith(('.lnk', '.url')):
-                # ショートカット（.lnk / .url）は発見次第、即座に一律排除
-                try:
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                        logger.info(f'[DESTROY IMMEDIATE] {filepath}')
-                except Exception as e:
-                    logger.warning(f'{e}: {filepath}')
-                continue
+        # Notification Specification
+        # https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotification.tag?view=winrt-26100
+        # tag max length: 64
+        # group max length: 64
+        def get_tag(filename: str) -> str:
+            return os.path.basename(filename)[:64]
 
-            # 通常のファイル・フォルダの滞在時間を計算
-            elapsed_time = time.time() - self.watch_files[filepath]
-            if elapsed_time > self.lifetime:
-                logger.warning(f'[ACTION] {filepath} has expired ({int(elapsed_time)}s).')
-                notify(f'{filepath} expired (still not remove)')
-
-        # omit disappeared files from watch_files
-        for filepath in self.watch_files.copy():
-            if filepath in self.watch_files:
-                if not os.path.exists(filepath):
-                    del self.watch_files[filepath]
-
-    def runSchedule(self):
-        self.doMonitor()
-
-        schedule.every(WATCH_INTERVAL).seconds.do(self.doMonitor)
-        schedule.every(WATCH_INTERVAL).seconds.do(self.doRemove)
+        def get_group(name: str) -> str:
+            return name[:64]
 
         while not self.stop_event.is_set():
-            schedule.run_pending()
-            if self.stop_event.wait(1):
+            begin = time.time()
+
+            for filepath in self.monitor_files:
+                if filepath.lower().endswith(('.lnk', '.url')):
+                    # ショートカット（.lnk / .url）は発見次第、即座に一律排除
+                    try:
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                            logger.info(f'[DESTROY IMMEDIATE] {filepath}')
+                    except Exception as e:
+                        logger.warning(f'{e}: {filepath}')
+                    continue
+
+                # 通常のファイル・フォルダの滞在時間を計算
+                elapsed_time = time.time() - self.monitor_files[filepath]
+                if elapsed_time >= 60 * self.lifetime:
+                    # open folder if notification clicked
+                    # dirty ad hoc hack!!
+                    xfolderpath = os.path.dirname(filepath).replace('\\', '/')
+                    open_folder_xml = xml.replace('launch="http:"', f'launch="file:///{xfolderpath}"')
+                    group = 'ACTION REQUIRED'
+                    notify(
+                        title=group,
+                        body=filepath,
+                        icon={
+                            'src': resource_path('Assets/sample.ico'),
+                            'placement': 'appLogoOverride',
+                        },
+                        xml=open_folder_xml,
+                        app_id=TITLE,
+                        group=get_group(group),
+                        tag=get_tag(filepath),
+                        audio={'silent': 'true'},
+                    )
+                    logger.info(f'notification {group} {filepath}')
+
+            # omit disappeared files from monitor_files
+            for filepath in self.monitor_files.copy():
+                if filepath in self.monitor_files:
+                    if not os.path.exists(filepath):
+                        del self.monitor_files[filepath]
+
+            elapsed = time.time() - begin
+            sleep_time = max(0, self.remove_interval * 60 - elapsed)
+            if self.stop_event.wait(sleep_time):
                 break
-        schedule.clear()
 
     def stopApp(self):
         self.stop_event.set()
@@ -171,8 +263,10 @@ class TaskTray:
     def runApp(self):
         self.stop_event.clear()
 
-        task_thread = threading.Thread(target=self.runSchedule)
-        task_thread.start()
+        monitor_thread = threading.Thread(target=self.doMonitor)
+        monitor_thread.start()
+        remove_thread = threading.Thread(target=self.doRemove)
+        remove_thread.start()
 
         self.app.run()
 
