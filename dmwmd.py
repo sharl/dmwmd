@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass
 import binascii
 import ctypes
+import hashlib
 import io
 import logging
 import logging.handlers
@@ -240,11 +241,9 @@ class TaskTray:
         # https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotification.tag?view=winrt-26100
         # tag max length: 64
         # group max length: 64
-        def get_tag(filename: str) -> str:
-            return os.path.basename(filename)[:64]
-
-        def get_group(name: str) -> str:
-            return name[:64]
+        # 25 + 1 + 32 = 58 < 64
+        def _make_hash(name: str) -> str:
+            return  hashlib.md5(name.encode('utf-8')).hexdigest()
 
         while not self.stop_destroy_event.is_set():
             begin = time.time()
@@ -277,8 +276,8 @@ class TaskTray:
                         },
                         xml=open_folder_xml,
                         app_id=TITLE,
-                        group=get_group(group),
-                        tag=get_tag(filepath),
+                        group=_make_hash(group),
+                        tag=_make_hash(os.path.basename(filepath)),
                         audio={'silent': 'true'},
                     )
                     logger.info(f'notification {group} {filepath}')
