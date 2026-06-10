@@ -27,8 +27,8 @@ TOOLTIP = "Don't mess with my desktop"
 MONITOR_TARGETS = get_desktop_folders()
 MONITOR_LIST = [1, 5, 10, 15, 30, 60]
 DEFAULT_MONITOR_INTERVAL = MONITOR_LIST[-1]
-REMOVE_LIST = [1, 5, 10, 15, 30, 60, 120]
-DEFAULT_REMOVE_INTERVAL = REMOVE_LIST[-1]
+DESTROY_LIST = [1, 5, 10, 15, 30, 60, 120]
+DEFAULT_DESTROY_INTERVAL = DESTROY_LIST[-1]
 LIFETIME_LIST = [0, 120, 360, 720, 1440]
 DEFAULT_LIFETIME = LIFETIME_LIST[-1]
 
@@ -51,7 +51,7 @@ class Setting:
     # minutes
     monitor_interval: int
     # minutes
-    remove_interval: int
+    destroy_interval: int
     # minutes
     lifetime: int
     delete_phisically: bool
@@ -77,13 +77,14 @@ def getVersion():
 
 class TaskTray:
     def __init__(self):
-        self.stop_event = threading.Event()
+        self.stop_monitor_event = threading.Event()
+        self.stop_destroy_event = threading.Event()
         self.config = Config(TITLE)
 
         # 監視する対象: 発見した時刻
         self.monitor_files = dict()
         self.monitor_interval = DEFAULT_MONITOR_INTERVAL
-        self.remove_interval = DEFAULT_REMOVE_INTERVAL
+        self.destroy_interval = DEFAULT_DESTROY_INTERVAL
         self.lifetime = DEFAULT_LIFETIME
         self.delete_phisically = False
 
@@ -98,13 +99,13 @@ class TaskTray:
                     checked=lambda x: self.monitor_interval == int(str(x).split()[0]),
                 ),
             )
-        remove_submenu = []
-        for i in REMOVE_LIST:
-            remove_submenu.append(
+        destroy_submenu = []
+        for i in DESTROY_LIST:
+            destroy_submenu.append(
                 MenuItem(
                     f'{i} minute{"" if i == 1 else "s"}',
-                    self.set_remove_interval,
-                    checked=lambda x: self.remove_interval == int(str(x).split()[0]),
+                    self.set_destroy_interval,
+                    checked=lambda x: self.destroy_interval == int(str(x).split()[0]),
                 ),
             )
         lifetime_submenu = []
@@ -121,7 +122,7 @@ class TaskTray:
             MenuItem(f'{TOOLTIP} {getVersion()}', lambda: False, default=True),
             Menu.SEPARATOR,
             MenuItem('Monitor Interval', Menu(*monitor_submenu)),
-            MenuItem('Remove Interval', Menu(*remove_submenu)),
+            MenuItem('Destroy Interval', Menu(*destroy_submenu)),
             MenuItem('Notification Duration', Menu(*lifetime_submenu)),
             # 監視間隔・削除間隔のサブメニューとかゴミ箱行き設定のオンオフとかを入れる予定
             Menu.SEPARATOR,
@@ -135,7 +136,7 @@ class TaskTray:
         try:
             setting = Setting(**self.config.load())
             self.monitor_interval = setting.monitor_interval
-            self.remove_interval = setting.remove_interval
+            self.destroy_interval = setting.destroy_interval
             self.lifetime = setting.lifetime
             self.delete_phisically = setting.delete_phisically
         except Exception:
@@ -144,7 +145,7 @@ class TaskTray:
     def save_config(self):
         setting = Setting(
             monitor_interval=self.monitor_interval,
-            remove_interval=self.remove_interval,
+            destroy_interval=self.destroy_interval,
             lifetime=self.lifetime,
             delete_phisically=self.delete_phisically,
         )
@@ -152,9 +153,23 @@ class TaskTray:
 
     def set_monitor_interval(self, _, item: MenuItem):
         self.monitor_interval = int(str(item).split()[0])
+        logger.debug(f'set monitor inverval to {self.monitor_interval}')
 
-    def set_remove_interval(self, _, item: MenuItem):
-        self.remove_interval = int(str(item).split()[0])
+        # force restart monitor thread
+        self.stop_monitor_event.set()
+        time.sleep(1)
+        self.stop_monitor_event.clear()
+        threading.Thread(target=self.doMonitor).start()
+
+    def set_destroy_interval(self, _, item: MenuItem):
+        self.destroy_interval = int(str(item).split()[0])
+        logger.debug(f'set destroy inverval to {self.destroy_interval}')
+
+        # force restart destroy thread
+        self.stop_destroy_event.set()
+        time.sleep(1)
+        self.stop_destroy_event.clear()
+        threading.Thread(target=self.doDestroy).start()
 
     def _get_lifetime(self, item: MenuItem) -> int:
         ls = str(item).split()
@@ -165,14 +180,21 @@ class TaskTray:
             lifetime = int(ls[0]) * 60
         return lifetime
 
-    def set_lifetime(self, _, item: MenuItem):
-        self.lifetime = self._get_lifetime(item)
-
     def x_lifetime(self, item: MenuItem) -> bool:
         return self.lifetime == self._get_lifetime(item)
 
+    def set_lifetime(self, _, item: MenuItem):
+        self.lifetime = self._get_lifetime(item)
+        logger.debug(f'set lifetime to {self.lifetime}')
+
+        # force restart destroy thread
+        self.stop_destroy_event.set()
+        time.sleep(1)
+        self.stop_destroy_event.clear()
+        threading.Thread(target=self.doDestroy).start()
+
     def doMonitor(self):
-        while not self.stop_event.is_set():
+        while not self.stop_monitor_event.is_set():
             begin = time.time()
 
             for target_dir in MONITOR_TARGETS:
@@ -185,19 +207,14 @@ class TaskTray:
 
                     filepath = os.path.join(target_dir, filename)
                     if filepath not in self.monitor_files:
-                        # 初めて発見した時刻を記録
-                        # もしくは st_ctime, st_mtime 的なやつ?
-                        # 作られたばかりなら様子を見てやってもいい
-                        # ディレクトリの扱いはまたあとで
-                        logger.debug(filepath)
                         self.monitor_files[filepath] = time.time()
 
             elapsed = time.time() - begin
             sleep_time = max(0, self.monitor_interval * 60 - elapsed)
-            if self.stop_event.wait(sleep_time):
+            if self.stop_monitor_event.wait(sleep_time):
                 break
 
-    def doRemove(self):
+    def doDestroy(self):
         # Notification Specification
         # https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotification.tag?view=winrt-26100
         # tag max length: 64
@@ -208,7 +225,7 @@ class TaskTray:
         def get_group(name: str) -> str:
             return name[:64]
 
-        while not self.stop_event.is_set():
+        while not self.stop_destroy_event.is_set():
             begin = time.time()
 
             for filepath in self.monitor_files:
@@ -252,21 +269,21 @@ class TaskTray:
                         del self.monitor_files[filepath]
 
             elapsed = time.time() - begin
-            sleep_time = max(0, self.remove_interval * 60 - elapsed)
-            if self.stop_event.wait(sleep_time):
+            sleep_time = max(0, self.destroy_interval * 60 - elapsed)
+            if self.stop_destroy_event.wait(sleep_time):
                 break
 
     def stopApp(self):
-        self.stop_event.set()
+        self.stop_monitor_event.set()
+        self.stop_destroy_event.set()
         self.app.stop()
 
     def runApp(self):
-        self.stop_event.clear()
+        self.stop_monitor_event.clear()
+        self.stop_destroy_event.clear()
 
-        monitor_thread = threading.Thread(target=self.doMonitor)
-        monitor_thread.start()
-        remove_thread = threading.Thread(target=self.doRemove)
-        remove_thread.start()
+        threading.Thread(target=self.doMonitor).start()
+        threading.Thread(target=self.doDestroy).start()
 
         self.app.run()
 
