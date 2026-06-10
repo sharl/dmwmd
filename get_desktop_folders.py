@@ -33,26 +33,31 @@ def com_string(fid: UUID) -> str | None:
             ctypes.windll.ole32.CoTaskMemFree(path_ptr)
 
 
-def get_desktop_folders() -> list[str]:
+def get_desktop_folders(public: bool = False) -> list[str]:
     """
     Get public and user desktop paths without duplicates
     """
+    folders = [FOLDERID_Desktop]
+    if public:
+        folders.append(FOLDERID_PublicDesktop)
     paths = set()
 
     # from GUIDs
-    for fid in [FOLDERID_Desktop, FOLDERID_PublicDesktop]:
+    for fid in folders:
         with com_string(fid) as path:
             if path and os.path.exists(path):
                 paths.add(path)
 
     # For environments where the API fails
-    fallback = os.path.expandvars(r'%PUBLIC%\Desktop')
-    if os.path.exists(fallback):
-        paths.add(fallback)
+    if public:
+        fallback = os.path.expandvars(r'%PUBLIC%\Desktop')
+        if os.path.exists(fallback):
+            paths.add(fallback)
 
     return sorted(list(paths))
 
 
 if __name__ == '__main__':
-    for folder in get_desktop_folders():
-        print(folder)
+    for b in [False, True]:
+        for folder in get_desktop_folders(b):
+            print(b, folder)
