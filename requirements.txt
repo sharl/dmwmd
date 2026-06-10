@@ -1,7 +1,6 @@
 darkdetect
 pillow
 pystray
-schedule
 six
 typing_extensions
 win11toast
