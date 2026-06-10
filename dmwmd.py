@@ -243,7 +243,7 @@ class TaskTray:
         # group max length: 64
         # 25 + 1 + 32 = 58 < 64
         def _make_hash(name: str) -> str:
-            return  hashlib.md5(name.encode('utf-8')).hexdigest()
+            return hashlib.md5(name.encode('utf-8')).hexdigest()
 
         while not self.stop_destroy_event.is_set():
             begin = time.time()
