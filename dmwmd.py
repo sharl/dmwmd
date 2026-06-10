@@ -24,6 +24,7 @@ TITLE = 'DMWMD'
 TOOLTIP = "Don't mess with my desktop"
 
 # default definitions
+DEFAULT_SEARCH_PUBLIC = False
 MONITOR_TARGETS = get_desktop_folders()
 MONITOR_LIST = [1, 5, 10, 15, 30, 60]
 DEFAULT_MONITOR_INTERVAL = MONITOR_LIST[-1]
@@ -48,6 +49,7 @@ logger.setLevel(logging.DEBUG)
 
 @dataclass
 class Setting:
+    search_public: bool
     # minutes
     monitor_interval: int
     # minutes
@@ -83,6 +85,7 @@ class TaskTray:
 
         # 監視する対象: 発見した時刻
         self.monitor_files = dict()
+        self.search_public = DEFAULT_SEARCH_PUBLIC
         self.monitor_interval = DEFAULT_MONITOR_INTERVAL
         self.destroy_interval = DEFAULT_DESTROY_INTERVAL
         self.lifetime = DEFAULT_LIFETIME
@@ -121,6 +124,8 @@ class TaskTray:
         main_menu = Menu(
             MenuItem(f'{TOOLTIP} {getVersion()}', lambda: False, default=True),
             Menu.SEPARATOR,
+            MenuItem('Enable Public Search', self.toggle_public, checked=lambda _: self.search_public),
+            Menu.SEPARATOR,
             MenuItem('Monitor Interval', Menu(*monitor_submenu)),
             MenuItem('Destroy Interval', Menu(*destroy_submenu)),
             MenuItem('Notification Duration', Menu(*lifetime_submenu)),
@@ -151,25 +156,37 @@ class TaskTray:
         )
         self.config.save(asdict(setting))
 
-    def set_monitor_interval(self, _, item: MenuItem):
-        self.monitor_interval = int(str(item).split()[0])
-        logger.debug(f'set monitor inverval to {self.monitor_interval}')
-
+    def _restart_monitor(self):
         # force restart monitor thread
         self.stop_monitor_event.set()
         time.sleep(1)
         self.stop_monitor_event.clear()
         threading.Thread(target=self.doMonitor).start()
 
-    def set_destroy_interval(self, _, item: MenuItem):
-        self.destroy_interval = int(str(item).split()[0])
-        logger.debug(f'set destroy inverval to {self.destroy_interval}')
-
+    def _restart_destroy(self):
         # force restart destroy thread
         self.stop_destroy_event.set()
         time.sleep(1)
         self.stop_destroy_event.clear()
         threading.Thread(target=self.doDestroy).start()
+
+    def toggle_public(self):
+        self.search_public = not self.search_public
+        logger.debug(f'set search public to {self.search_public}')
+
+        self._restart_monitor()
+
+    def set_monitor_interval(self, _, item: MenuItem):
+        self.monitor_interval = int(str(item).split()[0])
+        logger.debug(f'set monitor inverval to {self.monitor_interval}')
+
+        self._restart_monitor()
+
+    def set_destroy_interval(self, _, item: MenuItem):
+        self.destroy_interval = int(str(item).split()[0])
+        logger.debug(f'set destroy inverval to {self.destroy_interval}')
+
+        self._restart_destroy()
 
     def _get_lifetime(self, item: MenuItem) -> int:
         ls = str(item).split()
@@ -194,10 +211,12 @@ class TaskTray:
         threading.Thread(target=self.doDestroy).start()
 
     def doMonitor(self):
+        monitor_targets = get_desktop_folders(self.search_public)
+
         while not self.stop_monitor_event.is_set():
             begin = time.time()
 
-            for target_dir in MONITOR_TARGETS:
+            for target_dir in monitor_targets:
                 if not os.path.exists(target_dir):
                     continue
 
@@ -282,8 +301,8 @@ class TaskTray:
         self.stop_monitor_event.clear()
         self.stop_destroy_event.clear()
 
-        threading.Thread(target=self.doMonitor).start()
-        threading.Thread(target=self.doDestroy).start()
+        self._restart_monitor()
+        self._restart_destroy()
 
         self.app.run()
 
