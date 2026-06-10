@@ -140,6 +140,7 @@ class TaskTray:
     def load_config(self):
         try:
             setting = Setting(**self.config.load())
+            self.search_public = setting.search_public
             self.monitor_interval = setting.monitor_interval
             self.destroy_interval = setting.destroy_interval
             self.lifetime = setting.lifetime
@@ -149,6 +150,7 @@ class TaskTray:
 
     def save_config(self):
         setting = Setting(
+            search_public=self.search_public,
             monitor_interval=self.monitor_interval,
             destroy_interval=self.destroy_interval,
             lifetime=self.lifetime,
@@ -173,18 +175,21 @@ class TaskTray:
     def toggle_public(self):
         self.search_public = not self.search_public
         logger.debug(f'set search public to {self.search_public}')
+        self.save_config()
 
         self._restart_monitor()
 
     def set_monitor_interval(self, _, item: MenuItem):
         self.monitor_interval = int(str(item).split()[0])
         logger.debug(f'set monitor inverval to {self.monitor_interval}')
+        self.save_config()
 
         self._restart_monitor()
 
     def set_destroy_interval(self, _, item: MenuItem):
         self.destroy_interval = int(str(item).split()[0])
         logger.debug(f'set destroy inverval to {self.destroy_interval}')
+        self.save_config()
 
         self._restart_destroy()
 
@@ -203,12 +208,9 @@ class TaskTray:
     def set_lifetime(self, _, item: MenuItem):
         self.lifetime = self._get_lifetime(item)
         logger.debug(f'set lifetime to {self.lifetime}')
+        self.save_config()
 
-        # force restart destroy thread
-        self.stop_destroy_event.set()
-        time.sleep(1)
-        self.stop_destroy_event.clear()
-        threading.Thread(target=self.doDestroy).start()
+        self._restart_destroy()
 
     def doMonitor(self):
         monitor_targets = get_desktop_folders(self.search_public)
