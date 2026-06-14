@@ -1,6 +1,7 @@
 darkdetect
 pillow
 pystray
+send2trash
 six
 typing_extensions
 win11toast

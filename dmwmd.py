@@ -12,6 +12,7 @@ import time
 
 from PIL import Image
 from pystray import Icon, Menu, MenuItem
+from send2trash import send2trash
 from win11toast import xml, notify
 import darkdetect as dd
 
@@ -126,6 +127,7 @@ class TaskTray:
             MenuItem(f'{TOOLTIP} {getVersion()}', lambda: False, default=True),
             Menu.SEPARATOR,
             MenuItem('Enable Public Search', self.toggle_public, checked=lambda _: self.search_public),
+            MenuItem('Enable Physical Deletion', self.toggle_deletion, checked=lambda _: self.delete_phisically),
             Menu.SEPARATOR,
             MenuItem('Monitor Interval', Menu(*monitor_submenu)),
             MenuItem('Destroy Interval', Menu(*destroy_submenu)),
@@ -176,6 +178,13 @@ class TaskTray:
     def toggle_public(self):
         self.search_public = not self.search_public
         logger.debug(f'set search public to {self.search_public}')
+        self.save_config()
+
+        self._restart_monitor()
+
+    def toggle_deletion(self):
+        self.delete_phisically = not self.delete_phisically
+        logger.debug(f'set physical deletion to {self.delete_phisically}')
         self.save_config()
 
         self._restart_monitor()
@@ -253,8 +262,12 @@ class TaskTray:
                     # ショートカット（.lnk / .url）は発見次第、即座に一律排除
                     try:
                         if os.path.exists(filepath):
-                            os.remove(filepath)
-                            logger.info(f'[DESTROY IMMEDIATE] {filepath}')
+                            if self.delete_phisically:
+                                os.remove(filepath)
+                                logger.info(f'[DESTROY IMMEDIATE] {filepath}')
+                            else:
+                                send2trash(filepath)
+                                logger.info(f'[MOVED TO TRASH] {filepath}')
                     except Exception as e:
                         logger.warning(f'{e}: {filepath}')
                     continue
