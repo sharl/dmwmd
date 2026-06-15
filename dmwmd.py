@@ -14,6 +14,7 @@ from PIL import Image
 from pystray import Icon, Menu, MenuItem
 from send2trash import send2trash
 from win11toast import xml, notify
+from winrt.windows.ui.notifications import ToastNotificationManager
 import darkdetect as dd
 
 from config import Config
@@ -132,7 +133,6 @@ class TaskTray:
             MenuItem('Monitor Interval', Menu(*monitor_submenu)),
             MenuItem('Destroy Interval', Menu(*destroy_submenu)),
             MenuItem('Notification Duration', Menu(*lifetime_submenu)),
-            # 監視間隔・削除間隔のサブメニューとかゴミ箱行き設定のオンオフとかを入れる予定
             Menu.SEPARATOR,
             MenuItem('Exit', self.stopApp),
         )
@@ -275,13 +275,22 @@ class TaskTray:
                 # 通常のファイル・フォルダの滞在時間を計算
                 elapsed_time = time.time() - self.monitor_files[filepath]
                 if elapsed_time >= 60 * self.lifetime:
+                    title = 'ACTION Required'
+                    group = _make_hash(TITLE)
+                    tag = _make_hash(os.path.basename(filepath))
+
+                    if not os.path.exists(filepath):
+                        # 消えてたなら次のファイルへ
+                        # 通知も消す
+                        ToastNotificationManager.history.remove_grouped_tag_with_id(tag, group, TITLE)
+                        continue
+
                     # open folder if notification clicked
                     # dirty ad hoc hack!!
                     xfolderpath = os.path.dirname(filepath).replace('\\', '/')
                     open_folder_xml = xml.replace('launch="http:"', f'launch="file:///{xfolderpath}"')
-                    group = 'ACTION REQUIRED'
                     notify(
-                        title=group,
+                        title=title,
                         body=filepath,
                         icon={
                             'src': resource_path('Assets/sample.ico'),
@@ -289,11 +298,11 @@ class TaskTray:
                         },
                         xml=open_folder_xml,
                         app_id=TITLE,
-                        group=_make_hash(group),
-                        tag=_make_hash(os.path.basename(filepath)),
+                        group=group,
+                        tag=tag,
                         audio={'silent': 'true'},
                     )
-                    logger.info(f'notification {group} {filepath}')
+                    logger.info(f'notification [{title}] {filepath}')
 
             # omit disappeared files from monitor_files
             for filepath in self.monitor_files.copy():
