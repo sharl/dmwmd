@@ -11,6 +11,7 @@ import threading
 import time
 
 from PIL import Image
+from psutil import disk_usage
 from pystray import Icon, Menu, MenuItem
 from send2trash import send2trash
 from win11toast import xml, notify
@@ -20,6 +21,7 @@ import darkdetect as dd
 from config import Config
 from getLog import getLog
 from get_desktop_folders import get_desktop_folders
+from get_recyclebin_stats import get_recyclebin_stats
 from utils import resource_path
 
 TITLE = 'DMWMD'
@@ -240,6 +242,24 @@ class TaskTray:
                     if filepath not in self.monitor_files:
                         self.monitor_files[filepath] = time.time()
 
+            # get stats for recyclebin
+            disk = disk_usage('C:')
+            stats = get_recyclebin_stats()
+            size = stats.get('size', 0)
+            itms = stats.get('items', 0)
+            rate = size * 100 / disk.total
+
+            lines = [TOOLTIP]
+            if itms:
+                lines = [
+                    TITLE,
+                    f'{rate:.2f}% ({itms})',
+                ]
+            tooltip = ' '.join(lines)
+            self.app.title = tooltip
+            if itms:
+                logger.debug(tooltip)
+
             elapsed = time.time() - begin
             sleep_time = max(0, self.monitor_interval * 60 - elapsed)
             if self.stop_monitor_event.wait(sleep_time):
@@ -283,6 +303,7 @@ class TaskTray:
                         # 消えてたなら次のファイルへ
                         # 通知も消す
                         ToastNotificationManager.history.remove_grouped_tag_with_id(tag, group, TITLE)
+                        logger.debug(f'delete {filepath} notification')
                         continue
 
                     # open folder if notification clicked
