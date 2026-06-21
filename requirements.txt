@@ -1,5 +1,6 @@
 darkdetect
 pillow
+psutil
 pystray
 send2trash
 six
