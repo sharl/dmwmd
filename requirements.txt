@@ -6,7 +6,7 @@ send2trash
 six
 typing_extensions
 win11toast
-winrt-runtime
+winrt-runtime < 4
 winrt-Windows.Data.Xml.Dom
 winrt-Windows.Foundation
 winrt-Windows.Foundation.Collections
